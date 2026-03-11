@@ -1,18 +1,18 @@
 using System.Net;
-using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace SampleApp.IntegrationTests;
 
 /// <summary>
-/// Example-only tests showing how to use WebApplicationFactory&lt;Program&gt;.
-/// These are skipped by default so they don't require any specific infrastructure.
+/// Example tests showing how to use WebApplicationFactory&lt;Program&gt;
+/// with a custom factory that swaps the real SQL Server instance for a
+/// SQL Server testcontainer via ConfigureTestServices.
 /// </summary>
-public sealed class WebApplicationFactoryExampleTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public sealed class WebApplicationFactoryExampleTests(TestWebApplicationFactory factory)
+    : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client = factory.CreateClient();
 
-    [Fact(Skip = "Example of WebApplicationFactory usage for learning; enable when you want to run it.")]
+    [Fact]
     public async Task GetRoot_WithRealHost_ShouldReturnAStatusCode()
     {
         var response = await _client.GetAsync("/");
