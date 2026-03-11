@@ -1,6 +1,7 @@
 using DotNet.Testcontainers.Containers;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,61 +13,53 @@ using WireMock.Server;
 
 namespace SampleApp.IntegrationTests;
 
-public sealed class IntegrationTestFixture : WebApplicationFactory<Program>, IAsyncLifetime
+public sealed class IntegrationTestFixture : IAsyncLifetime
 {
     private readonly MsSqlContainer _sqlContainer = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
     private readonly string _databaseName = $"SampleAppTests_{Guid.NewGuid():N}";
-    private readonly WireMockServer _wireMockServer = WireMockServer.Start();
+    private WireMockServer _wireMockServer = null!;
+    private WebApplication _app = null!;
 
-    public HttpClient Client => CreateClient();
-
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
-    {
-        builder.UseEnvironment("Development");
-
-        builder.ConfigureAppConfiguration((_, configBuilder) =>
-        {
-            var configurationOverrides = new Dictionary<string, string?>
-            {
-                ["Catalog:BaseUrl"] = _wireMockServer.Url!
-            };
-
-            configBuilder.AddInMemoryCollection(configurationOverrides);
-        });
-
-        builder.ConfigureServices(services =>
-        {
-            // Replace the AppDbContext registration to point at the SQL Server testcontainer.
-            var descriptor = services.SingleOrDefault(
-                d => d.ServiceType == typeof(DbContextOptions<AppDbContext>));
-            if (descriptor is not null)
-            {
-                services.Remove(descriptor);
-            }
-
-            services.AddDbContext<AppDbContext>(options =>
-            {
-                options.UseSqlServer(BuildConnectionString());
-            });
-        });
-    }
-
-    public IntegrationTestFixture()
-    {
-        // Ensure the SQL Server testcontainer is started before the host builds,
-        // so that the overridden connection string points to a live database.
-        _sqlContainer.StartAsync().GetAwaiter().GetResult();
-    }
+    public HttpClient Client { get; private set; } = null!;
+    public IServiceProvider Services => _app.Services;
 
     public async Task InitializeAsync()
     {
-        using var scope = Services.CreateScope();
-        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        await dbContext.Database.EnsureCreatedAsync();
+        await _sqlContainer.StartAsync();
+        _wireMockServer = WireMockServer.Start();
+
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = "Development"
+        });
+
+        builder.WebHost.UseTestServer();
+
+        var configurationOverrides = new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:SqlServer"] = BuildConnectionString(),
+            ["Catalog:BaseUrl"] = _wireMockServer.Url!
+        };
+        builder.Configuration.AddInMemoryCollection(configurationOverrides);
+
+        AppComposition.ConfigureServices(builder.Services, builder.Configuration);
+
+        _app = builder.Build();
+        AppComposition.ConfigureEndpoints(_app);
+
+        using (var scope = _app.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await dbContext.Database.EnsureCreatedAsync();
+        }
+
+        await _app.StartAsync();
+        Client = _app.GetTestClient();
     }
 
-    async Task IAsyncLifetime.DisposeAsync()
+    public async Task DisposeAsync()
     {
+        await _app.DisposeAsync();
         _wireMockServer.Stop();
         _wireMockServer.Dispose();
         await _sqlContainer.StopAsync();
@@ -100,7 +93,7 @@ public sealed class IntegrationTestFixture : WebApplicationFactory<Program>, IAs
         _wireMockServer.ResetMappings();
         _wireMockServer.ResetLogEntries();
 
-        using var scope = Services.CreateScope();
+        using var scope = _app.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await dbContext.Database.ExecuteSqlRawAsync("DELETE FROM [Orders]");
     }

@@ -7,8 +7,7 @@ public sealed class BasicHealthCheckTests(IntegrationTestFixture fixture) : ICla
     [Fact]
     public async Task GetRoot_ShouldReturnNotFoundOrSuccess()
     {
-        // This shows the \"vanilla\" WebApplicationFactory<Program> usage pattern.
-        var client = fixture.CreateClient();
+        var client = fixture.Client;
 
         var response = await client.GetAsync("/");
 
